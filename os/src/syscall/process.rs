@@ -3,7 +3,7 @@
 use crate::{
     config::MAX_SYSCALL_NUM,
     task::{exit_current_and_run_next, get_current_tcb, suspend_current_and_run_next, TaskStatus},
-    timer::get_time_us,
+    timer::{get_time_ms, get_time_us},
 };
 
 #[repr(C)]
@@ -58,7 +58,7 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     // labour in vain! The status must be Running
     let status = cur_tcb.task_status;
     let syscall_times = cur_tcb.syscall_times;
-    let time = 0usize;
+    let time = get_time_ms() - cur_tcb.time;
 
     unsafe {
         *_ti = TaskInfo {
