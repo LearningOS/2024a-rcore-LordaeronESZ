@@ -14,6 +14,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
@@ -135,6 +136,13 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Get current task control block
+    pub fn get_current_tcb(&self) -> TaskControlBlock {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].clone()
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +176,9 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Get current task control block
+pub fn get_current_tcb() -> TaskControlBlock {
+    TASK_MANAGER.get_current_tcb()
 }
