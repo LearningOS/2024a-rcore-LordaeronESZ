@@ -14,8 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -140,6 +142,11 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            // if the task is being called for the first time,
+            if inner.tasks[next].time == 0usize {
+                // then set it to the current time
+                inner.tasks[next].time = get_time_ms();
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -152,6 +159,31 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// Get task's syscall times
+    pub fn get_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times.clone()
+    }
+
+    /// Get task's time span between current time and first scheduled time
+    pub fn get_scheduled_timespan(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        get_time_ms() - inner.tasks[current].time
+    }
+
+    /// Increase syscall times
+    pub fn inc_syscall_times(&self, syscall_id: usize) -> bool {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            return false;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+        true
     }
 }
 
@@ -201,4 +233,19 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Get current task's syscall times
+pub fn get_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_syscall_times()
+}
+
+/// Get current task's time span between current time and first scheduled time
+pub fn get_scheduled_timespan() -> usize {
+    TASK_MANAGER.get_scheduled_timespan()
+}
+
+/// Increase current task's syscall times
+pub fn inc_syscall_times(syscall_id: usize) -> bool {
+    TASK_MANAGER.inc_syscall_times(syscall_id)
 }
