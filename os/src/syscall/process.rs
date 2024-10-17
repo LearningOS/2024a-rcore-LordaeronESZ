@@ -4,7 +4,7 @@ use core::mem::size_of;
 
 use crate::{
     config::MAX_SYSCALL_NUM, mm::translated_byte_buffer, task::{
-        change_program_brk, current_user_token, exit_current_and_run_next, get_scheduled_timespan, get_syscall_times, suspend_current_and_run_next, TaskStatus
+        change_program_brk, current_user_token, exit_current_and_run_next, get_scheduled_timespan, get_syscall_times, suspend_current_and_run_next, task_mmap, task_munmap, TaskStatus
     }, timer::get_time_us
 };
 
@@ -86,14 +86,14 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
 
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+    // trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
+    task_mmap(_start, _len, _port)
 }
 
 // YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+    // trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
+    task_munmap(_start, _len)
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

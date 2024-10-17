@@ -63,6 +63,19 @@ impl MemorySet {
             None,
         );
     }
+    /// Remove framed area
+    pub fn remove_framed_area(&mut self, range: VPNRange) {
+        let mut idx = 0;
+        for area in self.areas.iter_mut() {
+            if area.vpn_range.get_start().0 == range.get_start().0 
+                && area.vpn_range.get_end().0 == range.get_end().0 {
+                area.unmap(&mut self.page_table);
+                break;
+            }
+            idx += 1;
+        }
+        self.areas.remove(idx);
+    }
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {

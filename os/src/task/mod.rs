@@ -16,6 +16,7 @@ mod task;
 
 use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{is_mem_sufficient, MapPermission, VPNRange, VirtAddr, VirtPageNum};
 use crate::sync::UPSafeCell;
 use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
@@ -185,6 +186,55 @@ impl TaskManager {
         inner.tasks[current].syscall_times[syscall_id] += 1;
         true
     }
+
+    /// Map some pages to memory_set
+    fn mmap(&self, start_va: VirtAddr, end_va: VirtAddr, port: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        let vpn_range = VPNRange::new(
+            VirtPageNum::from(start_va),
+            end_va.ceil()
+        );
+        
+        // 3. Check if trying to map mapped page
+        for vpn in vpn_range {
+            if let Some(pte) = inner.tasks[cur].memory_set.translate(vpn) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+        }
+
+        // After checking all errors may occur,
+        // push a new map_area to current memory_set
+        let perm = MapPermission::from_bits((port as u8) << 1).unwrap() | MapPermission::U;
+        inner.tasks[cur].memory_set.insert_framed_area(start_va, end_va, perm);
+        0
+    }
+
+    /// Unmap some pages in memory set
+    fn munmap(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        let vpn_range = VPNRange::new(
+            VirtPageNum::from(start_va),
+            end_va.ceil(),
+        );
+
+        // 1. Check if trying to unmap unmapped page
+        for vpn in vpn_range {
+            if let Some(pte) = inner.tasks[cur].memory_set.translate(vpn) {
+                if !pte.is_valid() {
+                    return -1
+                }
+            }
+        }
+
+        // After checking all errors may occur,
+        // remove some pages from current memory_set
+        inner.tasks[cur].memory_set.remove_framed_area(vpn_range);
+        0
+    }
 }
 
 /// Run the first task in task list.
@@ -248,4 +298,32 @@ pub fn get_scheduled_timespan() -> usize {
 /// Increase current task's syscall times
 pub fn inc_syscall_times(syscall_id: usize) -> bool {
     TASK_MANAGER.inc_syscall_times(syscall_id)
+}
+
+/// Map some pages to current task's memory_set
+pub fn task_mmap(start: usize, len: usize, port: usize) -> isize {
+    let start_va = VirtAddr::from(start);
+    // 1. illegal start virtual address or port
+    if !start_va.aligned() || port & !0x7 != 0 || port & 0x7 == 0 {
+        return -1;
+    }
+
+    // 2. Check is there sufficient physical memory
+    if !is_mem_sufficient(len) {
+        return -1;
+    }
+    
+    let end_va = VirtAddr::from(start + len);
+    TASK_MANAGER.mmap(start_va, end_va, port)
+}
+
+/// Unmap some pages in current task's memory set
+pub fn task_munmap(start: usize, len: usize) -> isize {
+    let start_va = VirtAddr::from(start);
+    if !start_va.aligned() {
+        return -1;
+    }
+    
+    let end_va = VirtAddr::from(start + len);
+    TASK_MANAGER.munmap(start_va, end_va)
 }
