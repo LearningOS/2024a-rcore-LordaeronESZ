@@ -1,5 +1,4 @@
 //! Process management syscalls
-//!
 use alloc::sync::Arc;
 
 use crate::{
@@ -7,8 +6,7 @@ use crate::{
     fs::{open_file, OpenFlags},
     mm::{translated_refmut, translated_str},
     task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, TaskStatus,
+        add_task, current_task, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus
     },
 };
 
@@ -171,7 +169,19 @@ pub fn sys_spawn(_path: *const u8) -> isize {
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    
+    // spawn a new process based upon _path
+    let token = current_user_token();
+    let _path = translated_str(token, _path);
+    let data_opt = open_file(&_path, OpenFlags::RDONLY);
+    if data_opt.is_none() {  // invalid file name
+        return -1;
+    }
+    let current_task = current_task().unwrap();
+    let new_task = current_task.spawn(data_opt.unwrap().read_all().as_slice());
+    let new_pid = new_task.getpid();
+    add_task(new_task);
+    new_pid as isize
 }
 
 // YOUR JOB: Set task priority.

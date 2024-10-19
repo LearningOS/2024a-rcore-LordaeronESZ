@@ -9,7 +9,7 @@ APPS := ../user/src/bin/*
 OFFLINE :=
 
 # BOARD
-BOARD := qemu
+BOARD ?= qemu
 SBI ?= rustsbi
 BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
 
@@ -54,12 +54,10 @@ fs-img: $(APPS)
 	@cd ../easy-fs-fuse && cargo run --release -- -s ../user/build/app/ -t ../user/target/riscv64gc-unknown-none-elf/release/
 
 kernel:
-	@make -C ../user build TEST=$(TEST) CHAPTER=$(CHAPTER) BASE=$(BASE)
-	@echo Platform: $(BOARD)
-	@cargo build $(MODE_ARG)
+	cargo build --release
 
 clean:
-	@cargo clean
+	cargo clean
 
 disasm: kernel
 	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) | less
