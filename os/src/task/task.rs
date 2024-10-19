@@ -1,8 +1,8 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
 use crate::fs::{File, Stdin, Stdout};
+use crate::config::{BIG_STRIDE, TRAP_CONTEXT_BASE};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
@@ -35,6 +35,21 @@ impl TaskControlBlock {
     pub fn get_user_token(&self) -> usize {
         let inner = self.inner_exclusive_access();
         inner.memory_set.token()
+    }
+    /// Set the schduling priority
+    pub fn set_prio(&self, prio: isize) {
+        let mut inner = self.inner_exclusive_access();
+        inner.set_prio(prio);
+    }
+    /// Get the schduling stride
+    pub fn get_stride(&self) -> isize {
+        let inner = self.inner_exclusive_access();
+        inner.stride
+    }
+    /// Increase the stride by pass
+    pub fn inc_stride(&self) {
+        let mut inner = self.inner_exclusive_access();
+        inner.inc_stride();
     }
 }
 
@@ -71,6 +86,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Scheduling priority
+    pub prio: isize,
+
+    /// Scheduling stride
+    pub stride: isize,
 }
 
 impl TaskControlBlockInner {
@@ -93,6 +114,13 @@ impl TaskControlBlockInner {
             self.fd_table.push(None);
             self.fd_table.len() - 1
         }
+    }
+    pub fn set_prio(&mut self, prio: isize) {
+        self.prio = prio;
+    }
+    pub fn inc_stride(&mut self) {
+        let pass = BIG_STRIDE / self.prio;
+        self.stride += pass;
     }
 }
 
@@ -135,6 +163,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    prio: 16,
+                    stride: 0,
                 })
             },
         };
@@ -216,6 +246,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    prio: 16,
+                    stride: 0,
                 })
             },
         });
@@ -260,6 +292,8 @@ impl TaskControlBlock {
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
                     fd_table: Vec::new(),
+                    prio: 16,
+                    stride: 0,
                 })
             },
         });

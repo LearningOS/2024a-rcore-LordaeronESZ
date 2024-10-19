@@ -23,5 +23,10 @@ pub const TRAP_CONTEXT_BASE: usize = TRAMPOLINE - PAGE_SIZE;
 pub const CLOCK_FREQ: usize = 12500000;
 /// the physical memory end
 pub const MEMORY_END: usize = 0x88000000;
+<<<<<<< HEAD
 /// The base address of control registers in Virtio_Block device
 pub const MMIO: &[(usize, usize)] = &[(0x10001000, 0x1000)];
+=======
+/// big constant for process scheduling
+pub const BIG_STRIDE: isize = 1000_000;
+>>>>>>> 6686ecb (finish sys_set_priority)
