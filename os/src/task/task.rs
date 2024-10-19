@@ -1,9 +1,10 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::{BIG_STRIDE, TRAP_CONTEXT_BASE};
+use crate::config::{BIG_STRIDE, MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -49,6 +50,25 @@ impl TaskControlBlock {
         let mut inner = self.inner_exclusive_access();
         inner.inc_stride();
     }
+    /// Get syscall times
+    pub fn get_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        inner.syscall_times.clone()
+    }
+    /// Get time span between current time and first scheduled time
+    pub fn get_scheduled_timespan(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        get_time_ms() - inner.time
+    }
+    /// Increase syscall times
+    pub fn inc_syscall_times(&self, syscall_id: usize) -> bool {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            return false;
+        }
+        let mut inner = self.inner.exclusive_access();
+        inner.syscall_times[syscall_id] += 1;
+        true
+    }
 }
 
 pub struct TaskControlBlockInner {
@@ -89,6 +109,12 @@ pub struct TaskControlBlockInner {
 
     /// Scheduling stride
     pub stride: isize,
+
+    /// The syscall times
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// The first time the task was scheduled
+    pub time: usize,
 }
 
 impl TaskControlBlockInner {
@@ -148,6 +174,8 @@ impl TaskControlBlock {
                     program_brk: user_sp,
                     prio: 16,
                     stride: 0,
+                    syscall_times: [0u32; MAX_SYSCALL_NUM],
+                    time: 0usize,
                 })
             },
         };
@@ -223,6 +251,8 @@ impl TaskControlBlock {
                     program_brk: parent_inner.program_brk,
                     prio: 16,
                     stride: 0,
+                    syscall_times: [0u32; MAX_SYSCALL_NUM],
+                    time: 0usize,
                 })
             },
         });
@@ -268,6 +298,8 @@ impl TaskControlBlock {
                     program_brk: parent_inner.program_brk,
                     prio: 16,
                     stride: 0,
+                    syscall_times: [0u32; MAX_SYSCALL_NUM],
+                    time: 0usize,
                 })
             },
         });
