@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use crate::{
     config::MAX_SYSCALL_NUM,
     loader::get_app_data_by_name,
-    mm::{translated_byte_buffer, translated_refmut, translated_str},
+    mm::{is_mem_sufficient, translated_byte_buffer, translated_refmut, translated_str, VirtAddr},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus
     }, timer::get_time_us,
@@ -172,7 +172,19 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
         "kernel:pid[{}] sys_mmap",
         current_task().unwrap().pid.0
     );
-    -1
+    let start_va = VirtAddr::from(_start);
+    // 1. illegal start virtual address or port
+    if !start_va.aligned() || _port & !0x7 != 0 || _port & 0x7 == 0 {
+        return -1;
+    }
+
+    // 2. Check is there sufficient physical memory
+    if !is_mem_sufficient(_len) {
+        return -1;
+    }
+    
+    let end_va = VirtAddr::from(_start + _len);
+    current_task().unwrap().mmap(start_va, end_va, _port)
 }
 
 /// YOUR JOB: Implement munmap.
@@ -181,7 +193,13 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
         "kernel:pid[{}] sys_munmap",
         current_task().unwrap().pid.0
     );
-    -1
+    let start_va = VirtAddr::from(_start);
+    if !start_va.aligned() {
+        return -1;
+    }
+    
+    let end_va = VirtAddr::from(_start + _len);
+    current_task().unwrap().munmap(start_va, end_va)
 }
 
 /// change data segment size
