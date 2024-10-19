@@ -1,7 +1,7 @@
 //! Implementation of [`FrameAllocator`] which
 //! controls all the frames in the operating system.
 use super::{PhysAddr, PhysPageNum};
-use crate::config::MEMORY_END;
+use crate::config::{MEMORY_END, PAGE_SIZE};
 use crate::sync::UPSafeCell;
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
@@ -133,4 +133,11 @@ pub fn frame_allocator_test() {
     }
     drop(v);
     println!("frame_allocator_test passed!");
+}
+
+/// Check if the remaining physical memory is sufficient
+pub fn is_mem_sufficient(_len: usize) -> bool {
+    let fa = FRAME_ALLOCATOR.exclusive_access();
+    let page_cnt = (fa.end - fa.current) / PAGE_SIZE + fa.recycled.len();
+    _len / PAGE_SIZE < page_cnt
 }
