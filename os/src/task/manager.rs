@@ -19,11 +19,27 @@ impl TaskManager {
     }
     /// Add process back to ready queue
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
+        task.inc_stride();
         self.ready_queue.push_back(task);
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        // self.ready_queue.pop_front()
+        let mut min_stride = isize::MAX;
+        let mut best_idx = 0;
+        for (idx, tcb) in self.ready_queue.iter().enumerate() {
+            let stride = tcb.get_stride();
+            if min_stride > stride {
+                min_stride = stride;
+                best_idx = idx;
+            }
+        }
+        if min_stride == isize::MAX {
+            None
+        } else {
+            self.ready_queue.swap(0, best_idx);
+            self.ready_queue.pop_front()
+        }
     }
 }
 
