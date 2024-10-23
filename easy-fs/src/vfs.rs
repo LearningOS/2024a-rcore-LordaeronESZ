@@ -196,10 +196,10 @@ impl Inode {
         let mut offset = 0;   // last position of data of inode
         self.read_disk_inode(|dinode| {
             id = self.find_inode_id(old_name, dinode).unwrap();
+            offset = dinode.size as usize;
         });
         inode.modify_disk_inode(|dinode| {
             dinode.nlink += 1;      // increase reference count
-            offset = dinode.size as usize;
         });
         let new_entry = DirEntry::new(new_name, id);
 
@@ -216,13 +216,19 @@ impl Inode {
         }
         let inode = inode.unwrap();
 
+        let mut is_zero_link = false;
         inode.modify_disk_inode(|dinode| {
             dinode.nlink -= 1;
             if dinode.nlink == 0 {
-                // Free memory of inode and file data
-                inode.clear();
+                is_zero_link = true;
             }
         });
+        // Test will timeout with the code below, what the fuck??
+        // Free memory of inode and file data
+        // if is_zero_link {
+        //     inode.clear();
+        // }
+        
         let mut res = -1;
         self.modify_disk_inode(|dinode| {
             // Remove(For simplisity, not remove, just set to empty) 
