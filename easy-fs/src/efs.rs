@@ -1,3 +1,5 @@
+use core::mem::size_of;
+
 use super::{
     block_cache_sync_all, get_block_cache, Bitmap, BlockDevice, DiskInode, DiskInodeType, Inode,
     SuperBlock,
@@ -147,5 +149,12 @@ impl EasyFileSystem {
             &self.block_device,
             (block_id - self.data_area_start_block) as usize,
         )
+    }
+
+    /// Get inode id based upon block id and block offset
+    pub fn get_ino(&self, block_id: usize, block_offset: usize) -> usize {
+        let inode_size = size_of::<DiskInode>();
+        let inode_cnt = (BLOCK_SZ / inode_size) as usize;
+        (block_id - self.inode_area_start_block as usize) * inode_cnt + block_offset / inode_size
     }
 }

@@ -1,5 +1,7 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat};
+use core::mem::size_of;
+
+use crate::fs::{open_file, OpenFlags, Stat, ROOT_INODE};
 use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
 use crate::task::{current_task, current_user_token};
 
@@ -78,26 +80,55 @@ pub fn sys_close(fd: usize) -> isize {
 /// YOUR JOB: Implement fstat.
 pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
     trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_fstat",
         current_task().unwrap().pid.0
     );
-    -1
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    if _fd > inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[_fd] {
+        let file = file.clone();
+        drop(inner);
+        let stat: Stat = file.get_stat();
+        let buffers = translated_byte_buffer(
+            current_user_token(), _st as *const u8, size_of::<Stat>());
+        let mut stat_ptr = &stat as *const _ as *const u8;
+        for buffer in buffers {
+            unsafe {
+                stat_ptr.copy_to(buffer.as_mut_ptr(), buffer.len());
+                stat_ptr = stat_ptr.add(buffer.len());
+            }
+        }
+        0
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Implement linkat.
 pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_linkat",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let _old_name = translated_str(token, _old_name);
+    let _new_name = translated_str(token, _new_name);
+    if _old_name == _new_name {
+        return -1;
+    }
+    ROOT_INODE.linkat(&_old_name, &_new_name)
 }
 
 /// YOUR JOB: Implement unlinkat.
 pub fn sys_unlinkat(_name: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_unlinkat",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let _name = translated_str(token, _name);
+    ROOT_INODE.unlinkat(&_name)
 }

@@ -183,4 +183,87 @@ impl Inode {
         });
         block_cache_sync_all();
     }
+    /// Create a hard link with new_name for file with old_name
+    pub fn linkat(&self, old_name: &str, new_name: &str) -> isize {
+        // get inode of file with old_name
+        let inode = self.find(old_name);
+        if inode.is_none() {
+            return -1;
+        }
+        let inode = inode.unwrap();
+
+        let mut id = 0;         // inode id
+        let mut offset = 0;   // last position of data of inode
+        self.read_disk_inode(|dinode| {
+            id = self.find_inode_id(old_name, dinode).unwrap();
+        });
+        inode.modify_disk_inode(|dinode| {
+            dinode.nlink += 1;      // increase reference count
+            offset = dinode.size as usize;
+        });
+        let new_entry = DirEntry::new(new_name, id);
+
+        // insert a new directory entry into ROOT_DIR
+        self.write_at(offset, new_entry.as_bytes());
+        0
+    }
+    /// Remove a hard link with name
+    pub fn unlinkat(&self, name: &str) -> isize {
+        // get inode of file with name
+        let inode = self.find(name);
+        if inode.is_none() {
+            return -1;
+        }
+        let inode = inode.unwrap();
+
+        inode.modify_disk_inode(|dinode| {
+            dinode.nlink -= 1;
+            if dinode.nlink == 0 {
+                // Free memory of inode and file data
+                inode.clear();
+            }
+        });
+        let mut res = -1;
+        self.modify_disk_inode(|dinode| {
+            // Remove(For simplisity, not remove, just set to empty) 
+            // the directory entry with name in the ROOT_DIR
+            let fcnt = (dinode.size as usize) / DIRENT_SZ;
+            for i in 0..fcnt {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    dinode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ
+                );
+                if dirent.name() == name {
+                    dirent = DirEntry::empty();
+                    dinode.write_at(i * DIRENT_SZ, dirent.as_bytes(), &self.block_device);
+                    res = 0;
+                }
+            }
+        });
+        res
+    }
+    /// Get nlink of the inode
+    pub fn get_nlink(&self) -> u32 {
+        let mut nlink = 0;
+        self.read_disk_inode(|dinode| {
+            nlink = dinode.nlink;
+        });
+        nlink
+    }
+    /// Get file type of the inode
+    pub fn get_file_type(&self) -> DiskInodeType {
+        let mut ftype = DiskInodeType::File;
+        self.read_disk_inode(|dinode| {
+            if dinode.is_dir() {
+                ftype = DiskInodeType::Directory;
+            }
+        });
+        ftype
+    }
+    /// Get inode number of the inode
+    pub fn get_ino(&self) -> u32 {
+        let fs = self.fs.lock();
+        fs.get_ino(self.block_id, self.block_offset) as u32
+    }
 }
