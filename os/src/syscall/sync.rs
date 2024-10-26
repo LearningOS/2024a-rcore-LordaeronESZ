@@ -1,3 +1,4 @@
+use core::cmp::max;
 use core::iter;
 
 use crate::sync::{Condvar, Mutex, MutexBlocking, MutexSpin, Semaphore};
@@ -75,6 +76,7 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
     let process_inner = process.inner_exclusive_access();
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
 
+    // set mutex_need to current 
     let task = current_task().unwrap();
     let mut task_inner = task.inner_exclusive_access();
     task_inner.mutex_need = mutex_id;
@@ -85,7 +87,7 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
         // initialize data structure for Banker's Algorithm:
         // Avavilable Vector, Allocation Matrix, Need Matrix
         let m = process_inner.mutex_list.len();
-        let available = iter::repeat(1).take(m).collect();
+        let mut available: Vec<usize> = iter::repeat(1).take(m).collect();
         let mut allocation: Vec<Vec<usize>> = Vec::new();
         for (i, task_opt) in process_inner.tasks.iter().enumerate() {
             allocation.push(iter::repeat(0).take(m).collect());
@@ -94,6 +96,7 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
                     let task_inner = task.inner_exclusive_access();
                     for mid in &task_inner.mutex_allocation {
                         allocation[i][*mid] += 1;
+                        available[*mid] -= 1;
                     }
                     drop(task_inner);
                 }
@@ -107,28 +110,36 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
                 Some(task) => {
                     let task_inner = task.inner_exclusive_access();
                     let nid = task_inner.mutex_need;
-                    need[i][nid] += 1;
+                    if nid != usize::MAX {
+                        need[i][nid] += 1;
+                    }
                     drop(task_inner);
                 }
                 None => {}
             }
         }
+
+        // banker_debug(available.clone(), allocation.clone(), need.clone());
+
         if !deadlock_check(available, allocation, need) {
             return -0xDEAD;
         }
     }
 
+    // println!("[debug] deadlock check passed");
+
+    
     drop(process_inner);
     drop(process);
     mutex.lock();
-  
+
     let task = current_task().unwrap();
     let mut task_inner = task.inner_exclusive_access();
     task_inner.mutex_allocation.push(mutex_id);
     task_inner.mutex_need = usize::MAX;
     drop(task_inner);
     drop(task);
-    
+
     0
 }
 /// mutex unlock syscall
@@ -144,12 +155,12 @@ pub fn sys_mutex_unlock(mutex_id: usize) -> isize {
             .unwrap()
             .tid
     );
+        
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
     drop(process_inner);
     drop(process);
-    mutex.unlock();
 
     let task = current_task().unwrap();
     let mut task_inner = task.inner_exclusive_access();
@@ -158,7 +169,8 @@ pub fn sys_mutex_unlock(mutex_id: usize) -> isize {
     }
     drop(task_inner);
     drop(task);
-
+    
+    mutex.unlock();
     0
 }
 /// semaphore create syscall
@@ -206,6 +218,36 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
             .unwrap()
             .tid
     );
+    
+    let process = current_process();
+    let process_inner = process.inner_exclusive_access();
+    let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
+    drop(process_inner);
+    
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    if let Some(index) = task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
+        task_inner.sem_allocation.remove(index);
+    }
+    drop(task_inner);
+    drop(task);
+    
+    sem.up();
+    0
+}
+/// semaphore down syscall
+pub fn sys_semaphore_down(sem_id: usize) -> isize {
+    trace!(
+        "kernel:pid[{}] tid[{}] sys_semaphore_down",
+        current_task().unwrap().process.upgrade().unwrap().getpid(),
+        current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .tid
+    );
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
@@ -219,13 +261,14 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
     if process_inner.dlcheck_option {
         // initialize data structure for Banker's Algorithm:
         // Avavilable Vector, Allocation Matrix, Need Matrix
-        let m = process_inner.mutex_list.len();
+        let m = process_inner.semaphore_list.len();
         let mut available:Vec<usize> = Vec::new();
         for sem_opt in &process_inner.semaphore_list {
             match sem_opt {
                 Some(sem) => {
                     let sem_inner = sem.inner.exclusive_access();
-                    available.push(sem_inner.count as usize);
+                    // available.push(sem_inner.count as usize);
+                    available.push(max(sem_inner.count, 0) as usize);
                     drop(sem_inner);
                 }
                 None => available.push(0),
@@ -252,59 +295,41 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
                 Some(task) => {
                     let task_inner = task.inner_exclusive_access();
                     let nid = task_inner.sem_need;
-                    need[i][nid] += 1;
+                    if nid != usize::MAX {
+                        need[i][nid] += 1;
+                    }
                     drop(task_inner);
                 }
                 None => {}
             }
         }
+
+        // banker_debug(available.clone(), allocation.clone(), need.clone());
+
         if !deadlock_check(available, allocation, need) {
             return -0xDEAD;
         }
     }
 
-    drop(process_inner);
-    sem.up();
-
-    let task = current_task().unwrap();
-    let mut task_inner = task.inner_exclusive_access();
-    // task_inner.sem_allocation.push((sem_id, 1));
-    match task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
-        Some(index) => task_inner.sem_allocation[index].1 += 1,
-        None => task_inner.sem_allocation.push((sem_id, 1)),
-    }
-    task_inner.sem_need = usize::MAX;
-    drop(task_inner);
-    drop(task);
-
-    0
-}
-/// semaphore down syscall
-pub fn sys_semaphore_down(sem_id: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] tid[{}] sys_semaphore_down",
-        current_task().unwrap().process.upgrade().unwrap().getpid(),
-        current_task()
-            .unwrap()
-            .inner_exclusive_access()
-            .res
-            .as_ref()
-            .unwrap()
-            .tid
-    );
-    let process = current_process();
-    let process_inner = process.inner_exclusive_access();
-    let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
+    // println!("[debug] deadlock check passed");
+    
     drop(process_inner);
     sem.down();
 
-    let task = current_task().unwrap();
-    let mut task_inner = task.inner_exclusive_access();
-    if let Some(index) = task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
-        task_inner.sem_allocation.remove(index);
-    }
-    drop(task_inner);
-    drop(task);
+    /*  The code below cannot be placed here,
+        because the scheduling is unpridictable,
+        so the allocation and need may not be updated in time! */
+    
+    // let task = current_task().unwrap();
+    // let mut task_inner = task.inner_exclusive_access();
+    // // task_inner.sem_allocation.push((sem_id, 1));
+    // match task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
+    //     Some(index) => task_inner.sem_allocation[index].1 += 1,
+    //     None => task_inner.sem_allocation.push((sem_id, 1)),
+    // }
+    // task_inner.sem_need = usize::MAX;
+    // drop(task_inner);
+    // drop(task);
 
     0
 }
@@ -401,7 +426,10 @@ pub fn sys_enable_deadlock_detect(_enabled: usize) -> isize {
 fn deadlock_check(available: Vec<usize>, allocation: Vec<Vec<usize>>, need: Vec<Vec<usize>>) -> bool {
     // n: thread count  m: resources count
     let (n, m) = (allocation.len(), allocation[0].len());
-    let mut work = available.clone();
+    assert_eq!(available.len(), m);
+    assert_eq!(need.len(), n);
+    assert_eq!(need[0].len(), m);
+    let mut work = available;
     let mut finish: Vec<bool> = iter::repeat(false).take(n).collect();
     loop {
         let mut idx = usize::MAX;
@@ -424,16 +452,38 @@ fn deadlock_check(available: Vec<usize>, allocation: Vec<Vec<usize>>, need: Vec<
         // has found a thread meet the requirement
         if idx != usize::MAX {
             for j in 0..m {
-                work[idx] += allocation[idx][j];
+                work[j] += allocation[idx][j];
             }
             finish[idx] = true;
         } else {
             break;
         }
     }
-    if finish.iter().all(|&x| x) {
-        true
-    } else {
-        false
+    finish.iter().all(|&x| x)
+}
+
+#[allow(unused)]
+/// Banker's Algorithm debug
+fn banker_debug(available: Vec<usize>, allocation: Vec<Vec<usize>>, need: Vec<Vec<usize>>) {
+    // [debug]: print deadlock check related data structure
+    println!("----------------------------------");
+    println!("[Available]");
+    for av in &available {
+        print!("{} ", *av);
     }
+    println!("\n[Allocation]");
+    for alloc in &allocation {
+        for al in alloc {
+            print!("{} ", *al);
+        }
+        println!("");
+    }
+    println!("[Need]");
+    for ned in &need {
+        for nd in ned {
+            print!("{} ", *nd);
+        }
+        println!("");
+    }
+    println!("----------------------------------");
 }

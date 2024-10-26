@@ -36,6 +36,15 @@ impl Semaphore {
         inner.count += 1;
         if inner.count <= 0 {
             if let Some(task) = inner.wait_queue.pop_front() {
+                let mut task_inner = task.inner_exclusive_access();
+                let sem_id = task_inner.sem_need;
+                match task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
+                    Some(index) => task_inner.sem_allocation[index].1 += 1,
+                    None => task_inner.sem_allocation.push((sem_id, 1)),
+                }
+                task_inner.sem_need = usize::MAX;
+                drop(task_inner);
+                
                 wakeup_task(task);
             }
         }
@@ -50,6 +59,17 @@ impl Semaphore {
             inner.wait_queue.push_back(current_task().unwrap());
             drop(inner);
             block_current_and_run_next();
+        } else {
+            let task = current_task().unwrap();
+            let mut task_inner = task.inner_exclusive_access();
+            let sem_id = task_inner.sem_need;
+            match task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
+                Some(index) => task_inner.sem_allocation[index].1 += 1,
+                None => task_inner.sem_allocation.push((sem_id, 1)),
+            }
+            task_inner.sem_need = usize::MAX;
+            drop(task_inner);
+            drop(task);
         }
     }
 }
