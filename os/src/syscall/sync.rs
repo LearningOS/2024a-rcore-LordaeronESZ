@@ -1,7 +1,10 @@
+use core::iter;
+
 use crate::sync::{Condvar, Mutex, MutexBlocking, MutexSpin, Semaphore};
 use crate::task::{block_current_and_run_next, current_process, current_task};
 use crate::timer::{add_timer, get_time_ms};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 /// sleep syscall
 pub fn sys_sleep(ms: usize) -> isize {
     trace!(
@@ -71,9 +74,61 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
+
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.mutex_need = mutex_id;
+    drop(task_inner);
+    drop(task);
+    
+    if process_inner.dlcheck_option {
+        // initialize data structure for Banker's Algorithm:
+        // Avavilable Vector, Allocation Matrix, Need Matrix
+        let m = process_inner.mutex_list.len();
+        let available = iter::repeat(1).take(m).collect();
+        let mut allocation: Vec<Vec<usize>> = Vec::new();
+        for (i, task_opt) in process_inner.tasks.iter().enumerate() {
+            allocation.push(iter::repeat(0).take(m).collect());
+            match task_opt {
+                Some(task) => {
+                    let task_inner = task.inner_exclusive_access();
+                    for mid in &task_inner.mutex_allocation {
+                        allocation[i][*mid] += 1;
+                    }
+                    drop(task_inner);
+                }
+                None => {}
+            }
+        }
+        let mut need: Vec<Vec<usize>> = Vec::new();
+        for (i, task_opt) in process_inner.tasks.iter().enumerate() {
+            need.push(iter::repeat(0).take(m).collect());
+            match task_opt {
+                Some(task) => {
+                    let task_inner = task.inner_exclusive_access();
+                    let nid = task_inner.mutex_need;
+                    need[i][nid] += 1;
+                    drop(task_inner);
+                }
+                None => {}
+            }
+        }
+        if !deadlock_check(available, allocation, need) {
+            return -0xDEAD;
+        }
+    }
+
     drop(process_inner);
     drop(process);
     mutex.lock();
+  
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.mutex_allocation.push(mutex_id);
+    task_inner.mutex_need = usize::MAX;
+    drop(task_inner);
+    drop(task);
+    
     0
 }
 /// mutex unlock syscall
@@ -95,6 +150,15 @@ pub fn sys_mutex_unlock(mutex_id: usize) -> isize {
     drop(process_inner);
     drop(process);
     mutex.unlock();
+
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    if let Some(index) = task_inner.mutex_allocation.iter().position(|&x| x == mutex_id) {
+        task_inner.mutex_allocation.remove(index);
+    }
+    drop(task_inner);
+    drop(task);
+
     0
 }
 /// semaphore create syscall
@@ -145,8 +209,74 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
+
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.sem_need = sem_id;
+    drop(task_inner);
+    drop(task);
+
+    if process_inner.dlcheck_option {
+        // initialize data structure for Banker's Algorithm:
+        // Avavilable Vector, Allocation Matrix, Need Matrix
+        let m = process_inner.mutex_list.len();
+        let mut available:Vec<usize> = Vec::new();
+        for sem_opt in &process_inner.semaphore_list {
+            match sem_opt {
+                Some(sem) => {
+                    let sem_inner = sem.inner.exclusive_access();
+                    available.push(sem_inner.count as usize);
+                    drop(sem_inner);
+                }
+                None => available.push(0),
+            }
+        }
+        let mut allocation: Vec<Vec<usize>> = Vec::new();
+        for (i, task_opt) in process_inner.tasks.iter().enumerate() {
+            allocation.push(iter::repeat(0).take(m).collect());
+            match task_opt {
+                Some(task) => {
+                    let task_inner = task.inner_exclusive_access();
+                    for (id, alloc) in &task_inner.sem_allocation {
+                        allocation[i][*id] += *alloc;
+                    }
+                    drop(task_inner);
+                }
+                None => {}
+            }
+        }
+        let mut need: Vec<Vec<usize>> = Vec::new();
+        for (i, task_opt) in process_inner.tasks.iter().enumerate() {
+            need.push(iter::repeat(0).take(m).collect());
+            match task_opt {
+                Some(task) => {
+                    let task_inner = task.inner_exclusive_access();
+                    let nid = task_inner.sem_need;
+                    need[i][nid] += 1;
+                    drop(task_inner);
+                }
+                None => {}
+            }
+        }
+        if !deadlock_check(available, allocation, need) {
+            return -0xDEAD;
+        }
+    }
+
     drop(process_inner);
     sem.up();
+
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    // task_inner.sem_allocation.push((sem_id, 1));
+    match task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
+        Some(index) => task_inner.sem_allocation[index].1 += 1,
+        None => task_inner.sem_allocation.push((sem_id, 1)),
+    }
+    task_inner.sem_need = usize::MAX;
+    drop(task_inner);
+    drop(task);
+
     0
 }
 /// semaphore down syscall
@@ -167,6 +297,15 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
     drop(process_inner);
     sem.down();
+
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    if let Some(index) = task_inner.sem_allocation.iter().position(|&x| x.0 == sem_id) {
+        task_inner.sem_allocation.remove(index);
+    }
+    drop(task_inner);
+    drop(task);
+
     0
 }
 /// condvar create syscall
@@ -246,6 +385,55 @@ pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
 ///
 /// YOUR JOB: Implement deadlock detection, but might not all in this syscall
 pub fn sys_enable_deadlock_detect(_enabled: usize) -> isize {
-    trace!("kernel: sys_enable_deadlock_detect NOT IMPLEMENTED");
-    -1
+    trace!("kernel: sys_enable_deadlock_detect");
+    let process = current_process();
+    let mut process_inner = process.inner_exclusive_access();
+    let mut flag = 0;
+    match _enabled {
+        0 => process_inner.dlcheck_option = false,
+        1 => process_inner.dlcheck_option = true,
+        _ => flag = -1,
+    }
+    drop(process_inner);
+    flag
+}
+/// Banker's Algoritm for dead lock check
+fn deadlock_check(available: Vec<usize>, allocation: Vec<Vec<usize>>, need: Vec<Vec<usize>>) -> bool {
+    // n: thread count  m: resources count
+    let (n, m) = (allocation.len(), allocation[0].len());
+    let mut work = available.clone();
+    let mut finish: Vec<bool> = iter::repeat(false).take(n).collect();
+    loop {
+        let mut idx = usize::MAX;
+        for i in 0..n {
+            let mut flag = true;
+            if finish[i] {
+                continue;
+            }
+            for j in 0..m {
+                if need[i][j] > work[j] {
+                    flag = false;
+                    break;
+                }
+            }
+            if flag {
+                idx = i;
+                break;
+            }
+        }
+        // has found a thread meet the requirement
+        if idx != usize::MAX {
+            for j in 0..m {
+                work[idx] += allocation[idx][j];
+            }
+            finish[idx] = true;
+        } else {
+            break;
+        }
+    }
+    if finish.iter().all(|&x| x) {
+        true
+    } else {
+        false
+    }
 }
